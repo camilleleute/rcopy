@@ -1,59 +1,68 @@
 
 // 
-// Writen by Hugh Smith, April 2020
+// Writen by Hugh Smith, April 2020, Feb. 2021
 //
 // Put in system calls with error checking
-// and and an s to the name: srealloc()
 // keep the function paramaters same as system call
 
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/uio.h>
-#include <sys/time.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <string.h>
-#include <strings.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <errno.h>
 
-#include "networks.h"
 #include "safeUtil.h"
 
-int safeRecv(int socketNum, uint8_t * buffer, int bufferLen, int flag)
-{
-    int bytesReceived = recv(socketNum, buffer, bufferLen, flag);
-    if (bytesReceived < 0)
-    {
-        if (errno == ECONNRESET)
-        {
-            bytesReceived = 0;
-        }
-        else
-        {
-            perror("recv call");
-            exit(-1);
-        }
-    }
-    return bytesReceived ;
-}
+#ifdef __LIBCPE464_
+#include "cpe464.h"
+#endif
 
-int safeSend(int socketNum, uint8_t * buffer, int bufferLen, int flag)
+int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int * addrLen)
 {
-	int bytesSent = 0;
-	if ((bytesSent = send(socketNum, buffer, bufferLen, flag)) < 0)
+	int returnValue = 0;
+	if ((returnValue = recvfrom(socketNum, buf, (size_t) len, flags, srcAddr, (socklen_t *) addrLen)) < 0)
 	{
-        perror("recv call");
-       exit(-1);
-     }
-	 
-    return bytesSent;
+		perror("recvfrom: ");
+		exit(-1);
+	}
+	
+	return returnValue;
 }
 
+int safeSendto(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int addrLen)
+{
+	int returnValue = 0;
+	if ((returnValue = sendto(socketNum, buf, (size_t) len, flags, srcAddr, (socklen_t) addrLen)) < 0)
+	{
+		perror("sendto: ");
+		exit(-1);
+	}
+	
+	return returnValue;
+}
+
+int safeRecv(int socketNum, void * buf, int len, int flags)
+{
+	int returnValue = 0;
+	if ((returnValue = recv(socketNum, buf, (size_t) len, flags)) < 0)
+	{
+		perror("recv: ");
+		exit(-1);
+	}
+	
+	return returnValue;
+}
+
+int safeSend(int socketNum, void * buf, int len, int flags)
+{
+	int returnValue = 0;
+	if ((returnValue = send(socketNum, buf, (size_t) len, flags)) < 0)
+	{
+		perror("send: ");
+		exit(-1);
+	}
+	
+	return returnValue;
+}
 
 void * srealloc(void *ptr, size_t size)
 {
