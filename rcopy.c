@@ -18,12 +18,22 @@
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
+#include "cpe464.h"
+#include "pollLib.h"
+
 
 #define MAXBUF 1407
 
-void talkToServer(int socketNum, struct sockaddr_in6 * server);
+void talkToServer(int socketNum, struct sockaddr_in6 * server, char * argv[]);
+void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum);
+void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize);
 int readFromStdin(char * buffer);
 int checkArgs(int argc, char * argv[]);
+int check_window_size(char * size);
+int check_buffer_size(char * size);
+int check_filename_length(char * filename, char * fromORto);
+int check_error_rate(char * rate);
+FILE * check_filename(char * filename);
 
 
 int main (int argc, char *argv[])
@@ -32,8 +42,12 @@ int main (int argc, char *argv[])
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
 	int portNumber = 0;
 	
-	portNumber = checkArgs(argc, argv);
-	
+	int argFlag = checkArgs(argc, argv);
+	if (argFlag) {
+		exit(1);
+	}
+	portNumber = atoi(argv[7]);
+
 	socketNum = setupUdpClientToServer(&server, argv[6], portNumber);
 	
 	talkToServer(socketNum, &server, argv);
@@ -53,22 +67,22 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	int serverSocket = 0;
 
 	// filename exchange
-	uint8_t count = 1
-	filenameExchangePacket(argv, &server, socketNum);
+	uint8_t count = 1;
+	filenameExchangePacket(argv, server, socketNum);
 	while (count < 10) {
-		int serverSocket = pollCall(1000) {
+		int serverSocket = pollCall(1000); 
 			if (serverSocket == -1) {
 				close(socketNum);
 				removeFromPollSet(socketNum);
-				newSocketNum = setupUdpClientToServer(&server, argv[6], atoi(argv[7]));
+				int newSocketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
 				addToPollSet(newSocketNum);
-				filenameExchangePacket(argv, &server, newSocketNum);
+				filenameExchangePacket(argv, server, newSocketNum);
 				count++;
 			}
 			else {
 				break;
 			}
-		}
+		
 	}
 
 	if (count == 10) {
@@ -78,8 +92,9 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 
 	uint8_t recvBuffer[MAXBUF];
 	int messageLen = 0;
+	socklen_t servAddrLen = sizeof(server);
 	
-	if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, sizeof(*server))) < 0)
+	if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
 	{
 		perror("recv call");
 		exit(-1);
@@ -87,7 +102,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	// check the checksum
 
 	uint8_t flag = 0;
-	memcpy(&flag, recvBuffer + 6, 1)
+	memcpy(&flag, recvBuffer + 6, 1);
 
 	// response to filename packet
 	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
@@ -96,7 +111,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	}
 
 	// if filename good
-	FILE * to_filename = check_filename(argv[1]);
+	//FILE * to_filename = check_filename(argv[1]);
 	printf("Fie OK!\n");
 	
 	
@@ -122,10 +137,11 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 	memcpy(filenamePacket+6, from_filename, filename_size + 1);
 
 	uint8_t sendBuf[MAXBUF];
+	filename_size =+ 7;
 
-	createPDU(sendBuf, 1, 8, filenamePacket, filename_size+7);
+	createPDU(sendBuf, 1, 8, filenamePacket, filename_size);
 	
-	int sent = sendtoErr(socketNum, sendBuf, bufSize+7, 0, (struct sockaddr *)server, sizeof(*server));
+	int sent = sendtoErr(socketNum, sendBuf, filename_size+7, 0, (struct sockaddr *)server, sizeof(*server));
 	if (sent <= 0)
 	{
 		perror("send call");
@@ -143,7 +159,7 @@ void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer
 	memset(sendBuf + 4, 0, 2);
 	memcpy(sendBuf+6, &flag, 1);
 	memcpy(sendBuf+7, buffer, bufSize);
-	uint16_t checksum = in_cksum(sendBuf, bufSize + 7);
+	uint16_t checksum = in_cksum((unsigned short *)sendBuf, bufSize + 7);
 	memcpy(sendBuf + 4, &checksum, 2);
 }
 
@@ -161,10 +177,7 @@ FILE * check_filename(char * filename) {
 
 int checkArgs(int argc, char * argv[])
 {
-
-    int portNumber = 0;
-	
-        /* check command line arguments  */
+	/* check command line arguments  */
 	if (argc != 8)
 	{
 		printf("Usage: %s from-filename to-filename window-size buffer-size error-rate remote-machine remote-port\n", argv[0]);
@@ -178,10 +191,8 @@ int checkArgs(int argc, char * argv[])
 	wrong_input = check_window_size(argv[3]);
 	wrong_input = check_buffer_size(argv[4]);
 	wrong_input = check_error_rate(argv[5]);
-	
-	portNumber = atoi(argv[7]);
 		
-	return portNumber;
+	return wrong_input;
 }
 
 int check_window_size(char * size){

@@ -13,11 +13,17 @@
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
+#include "cpe464.h"
+#include "pollLib.h"
+
 
 #define MAXBUF 1407
 
 void processClient(int socketNum);
+int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size);
 int checkArgs(int argc, char *argv[]);
+FILE * check_filename(char * filename);
+void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize);
 
 int main ( int argc, char *argv[]  )
 { 
@@ -44,7 +50,7 @@ void processClient(int socketNum)
 	while (1) {
 		addrLen = sizeof(client);
 		int messageLen = 0;
-		if ((messageLen = recvfrom(socketNum, recvBuff, MAXBUF, 0, (struct sockaddr *)client, sizeof(*client))) < 0)
+		if ((messageLen = recvfrom(socketNum, recvBuff, MAXBUF, 0, (struct sockaddr *)&client, &addrLen)) < 0)
 		{
 			perror("recv call");
 			continue;
@@ -60,12 +66,11 @@ void processClient(int socketNum)
 			continue;
 		} else if (valid == 2) {
 			// filename doesnt exist.
-			char smallBuf[1]; 
+			uint8_t smallBuf[1]; 
 			uint8_t sendBuff[MAXBUF];
 			memset(smallBuf, 0, 1);
 			createPDU(sendBuff, 1, 33, smallBuf, 1);
-	
-			int sent = sendtoErr(socketNum, sendBuff, 8, 0, (struct sockaddr *)client, sizeof(*client));
+			int sent = sendtoErr(socketNum, sendBuff, 8, 0, (struct sockaddr *)&client, sizeof(client));
 			if (sent <= 0)
 			{
 				perror("send call");
@@ -76,12 +81,11 @@ void processClient(int socketNum)
 		} else {
 			// good filename packet
 			char messageBuf[256]; 
-			int size = snprintf(messageBuf, sizeof(messageBuf), "file OK", filename);
+			int size = snprintf(messageBuf, sizeof(messageBuf), "file OK");
 			uint8_t sendBuf[MAXBUF];
 
-			createPDU(sendBuf, 1, 9, messageBuf, size +1);
-	
-			int sent = sendtoErr(socketNum, sendBuf, size+8, 0, (struct sockaddr *)server, sizeof(*server));
+			createPDU(sendBuf, 1, 9, (uint8_t *)messageBuf, size +1);
+			int sent = sendtoErr(socketNum, sendBuf, size + 8, 0, (struct sockaddr *)&client, sizeof(client));
 			if (sent <= 0)
 			{
 				perror("send call");
@@ -96,13 +100,13 @@ void processClient(int socketNum)
 }
 
 int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size) {
-	uint16_t checksum = in_cksum(buff, messageLen);
+	uint16_t checksum = in_cksum((unsigned short *)buff, messageLen);
 	uint8_t flag;
 	memcpy(&flag, buff+6, 1);
 	if ((flag != 8) || (checksum != 0)) {
 		return 1;
 	} else {
-		strcpy(filename, buff + 13);
+		strcpy(filename, (const char *)(buff + 13));
 		FILE * to_filename = check_filename(filename);
 
 		if (to_filename == NULL) {
@@ -118,26 +122,19 @@ int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_
 }
 
 FILE * check_filename(char * filename) {
-	FILE* file_pointer = fopen(filename, "w");
-	if (file_pointer == NULL) {
-		perror("Error on open of output file: %s\n");
-		exit(1);
-	}
+	FILE* file_pointer = fopen(filename, "r");
 	return file_pointer;
-	
 }
 
 void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize) {
-	uint32_t seq_num_NW = htonl(seq_num);
-	memcpy(sendBuf, &seq_num_NW, 4);
-	memset(sendBuf + 4, 0, 2);
-	memcpy(sendBuf+6, &flag, 1);
-	memcpy(sendBuf+7, buffer, bufSize);
-	uint16_t checksum = in_cksum(sendBuf, bufSize + 7);
-	memcpy(sendBuf + 4, &checksum, 2);
+    uint32_t seq_num_NW = htonl(seq_num);
+    memcpy(sendBuf, &seq_num_NW, 4);
+    memset(sendBuf + 4, 0, 2); 
+    memcpy(sendBuf + 6, &flag, 1);
+    memcpy(sendBuf + 7, buffer, bufSize);
+    uint16_t checksum = in_cksum((unsigned short *)sendBuf, bufSize + 7);
+    memcpy(sendBuf + 4, &checksum, 2); 
 }
-
-
 
 
 int checkArgs(int argc, char *argv[])
