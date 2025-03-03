@@ -1,10 +1,5 @@
-/******************************************************************************
-* myClient.c
-*
-* Writen by Prof. Smith, updated Jan 2023
-* Use at your own risk.  
-*
-*****************************************************************************/
+// Client side - UDP Code				    
+// By Hugh Smith	4/1/2017		
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,344 +14,213 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#include <stdint.h>
 
+#include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
-#include "send.h"
-#include "pollLib.h"
-#include "shared.h"
+
+#define MAXBUF 1407
+
+void talkToServer(int socketNum, struct sockaddr_in6 * server);
+int readFromStdin(char * buffer);
+int checkArgs(int argc, char * argv[]);
 
 
-#define MAXBUF 1402
-#define DEBUG_FLAG 1
-
-void sendToServer(int, char *);
-void parseAndPrint(char * , int);
-void processMsgFromServer(int);
-void clientControl(int, char *);
-void receiveFromServer(int );
-int readFromStdin(uint8_t *);
-void checkArgs(int argc, char * argv[]);
-char* handle_parser(int , uint8_t [], uint8_t [], int *);
-
-int main(int argc, char * argv[])
-{
-	int socketNum = 0;         //socket descriptor
+int main (int argc, char *argv[])
+ {
+	int socketNum = 0;				
+	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
+	int portNumber = 0;
 	
-	checkArgs(argc, argv);
-
-	/* set up the TCP Client socket  */
-	socketNum = tcpClientSetup(argv[2], argv[3], 0);
-	// client polling manager
-	clientControl(socketNum, argv[1]);
+	portNumber = checkArgs(argc, argv);
 	
+	socketNum = setupUdpClientToServer(&server, argv[6], portNumber);
+	
+	talkToServer(socketNum, &server, argv);
+	
+	close(socketNum);
+
 	return 0;
 }
 
-void clientControl(int clientSocket, char * myHandle) {
+
+void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
+{
+
+	sendtoErr_init(atof(argv[5]), DROP_ON, FLIP_ON, DEBUG_ON, RSEED_ON);
 	setupPollSet();
-	addToPollSet(clientSocket);
-	sendHandle(clientSocket, myHandle, 1);
+	addToPollSet(socketNum);
+	int serverSocket = 0;
 
-	while(1){
-		int curr_socket = pollCall(-1);
-		if (curr_socket == clientSocket) {
-			processMsgFromServer(curr_socket);
-
-		} else {
-			sendToServer(clientSocket, myHandle);
+	// filename exchange
+	uint8_t count = 1
+	filenameExchangePacket(argv, &server, socketNum);
+	while (count < 10) {
+		int serverSocket = pollCall(1000) {
+			if (serverSocket == -1) {
+				close(socketNum);
+				removeFromPollSet(socketNum);
+				newSocketNum = setupUdpClientToServer(&server, argv[6], atoi(argv[7]));
+				addToPollSet(newSocketNum);
+				filenameExchangePacket(argv, &server, newSocketNum);
+				count++;
+			}
+			else {
+				break;
+			}
 		}
-		printf("$: ");
-		fflush(stdout);
 	}
 
-}
+	if (count == 10) {
+		printf("Failed to send filename. Terminating.\n");
+		exit(1);
+	}
 
-
-
-void processMsgFromServer(int serverSocket){
-	uint8_t dataBuffer[MAXBUF];
+	uint8_t recvBuffer[MAXBUF];
 	int messageLen = 0;
 	
-	//now get the data from the server_socket
-	if ((messageLen = recvPDU(serverSocket, dataBuffer, MAXBUF)) < 0)
+	if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, sizeof(*server))) < 0)
 	{
 		perror("recv call");
 		exit(-1);
 	}
+	// check the checksum
 
-	if (messageLen > 0)
-	{
-		uint8_t flag = dataBuffer[0];
-		char *msg = (char *)&dataBuffer[1];
-		//printf("Flag is: %d\n", flag);
-		switch(flag){
-			case 2:
-				addToPollSet(STDIN_FILENO);
-				break;
-			case 3:
-				printf("Handle already in use: %s\n", msg);
-				exit(-1);
-				break;
-			case 4: // %B
-				parseAndPrint(msg, flag);
-				break;
-			case 5: // %M
-				parseAndPrint(msg, flag);
-				break;
-			case 6: // %C
-				parseAndPrint(msg, flag);
-				break;
-			case 7:
-				printf("\nClient with handle %s does not exist\n", msg);
-				break;
-			case 11: {
-				uint32_t num_handles = 0;
-				memcpy(&num_handles, msg, 4);
-				uint32_t num_handles_HOST = ntohl(num_handles);
-				printf("\nNumber of clients: %d\n", num_handles_HOST);
-				removeFromPollSet(STDIN_FILENO);					// block stdin?
-				pollCall(-1);
-				processMsgFromServer(serverSocket);
-				break;
-			}
-			case 12: {
-				uint8_t handle_len = dataBuffer[1];
-				uint8_t handle_name[handle_len+1];
-				memcpy(handle_name, &dataBuffer[2], handle_len);
-				handle_name[handle_len+1] = '\0';
-				printf("\t%s\n", handle_name);
-				pollCall(-1);
-				processMsgFromServer(serverSocket);
-				break;
-			}
-			case 13:
-				addToPollSet(STDIN_FILENO);
-				break;
-			default:
-				break;
-		}
-		
+	uint8_t flag = 0;
+	memcpy(&flag, recvBuffer + 6, 1)
+
+	// response to filename packet
+	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
+		printf("Error: file %s not found.\n", argv[1]);
+		exit(1);
 	}
 
-	else {
-		close(serverSocket);
-        printf("\nServer has terminated\n");
-		removeFromPollSet(serverSocket);
-		exit(-1);
-	}
+	// if filename good
+	FILE * to_filename = check_filename(argv[1]);
+	printf("Fie OK!\n");
+	
+	
+	
+	
+	// uint8_t state = 0;
+	// switch(state) {
+	// 	case ()
+	// }
 }
 
-void parseAndPrint(char * msg, int flag) {
-	// 				  msg |>      
-	// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
-	//   2 bytes     1            1               XX               1                1                  XX        XX
-	uint8_t src_handle_len = msg[0];
-	char src_handle[src_handle_len+1];
-	memcpy(src_handle, msg+1, src_handle_len);
-	src_handle[src_handle_len] = '\0';
-	int idx = src_handle_len + 1;
+void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum) {
 
-	if (flag == 6 || flag == 5) {
-		uint8_t num_dest_handles = msg[src_handle_len+1];
-		idx++;
-		for (int i = 0; i < num_dest_handles; i++){
-			uint8_t dest_handle_len = msg[idx++];
-			idx += dest_handle_len;
-		}
-	} 
+	uint32_t window_size = atoi(argv[3]);
+	uint16_t buffer_size = atoi(argv[4]);
+	char from_filename[101];
+	strcpy(from_filename, argv[1]);
+	uint8_t filename_size = strlen(from_filename);
 
-	msg += idx;
+	uint8_t filenamePacket[107];
+	memcpy(filenamePacket, &window_size, 4);
+	memcpy(filenamePacket+4, &buffer_size, 2);
+	memcpy(filenamePacket+6, from_filename, filename_size + 1);
+
+	uint8_t sendBuf[MAXBUF];
+
+	createPDU(sendBuf, 1, 8, filenamePacket, filename_size+7);
 	
-	char formatted_message[src_handle_len + 2 + strlen(msg) + 1];
-	snprintf(formatted_message, sizeof(formatted_message), "%s: %s", src_handle, msg);
-	printf("\n%s\n", formatted_message);
-
-}
-
-void sendToServer(int socketNum, char * myHandle)
-{
-	uint8_t sendBuf[MAXBUF];   
-	uint8_t inputMsg[MAXBUF];
-	char * msg = NULL;
-	int sendLen = 0;           //amount of data to send
-	int sent = 0;              //actual amount of data sent/* get the data and send it   
-	char command[3]; 		   //2 bytes + 1 for null terminator
-	int flag = 0;			   //numeric value of command
-	int src_handle_len = strlen(myHandle);
-	uint8_t num_dest_handles = 0;
-	int idx = 0; 				// index into sendBuf
-	int start = 0;				// where to start parsing for destination handles
-	
-
-	// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
-	//   2 bytes     1            1               XX               1                1                  XX        XX
-	memset(sendBuf, 0, sizeof(sendBuf));	
-	memset(inputMsg, 0, sizeof(inputMsg));	
-
-	int inputLen = readFromStdin(inputMsg); 
-	if (inputLen == -1){
-		return;
-	}
-
-	command[0] = inputMsg[0];
-	command[1] = inputMsg[1];
-	command[2] = '\0'; // Null terminate
-
-	if (strcmp(command, "%M") == 0 || strcmp(command, "%m") == 0) {
-        flag = 5;
-		num_dest_handles = 1;
-		start = 3;	
-    } else if (strcmp(command, "%B") == 0 || strcmp(command, "%b") == 0) {
-        flag = 4;
-    } else if (strcmp(command, "%C") == 0 || strcmp(command, "%c") == 0) {
-        flag = 6;
-		start = 5;
-		
-		char *token = strtok((char *)&inputMsg[3], " ");
-    
-		if (token == NULL) {
-			printf("Invalid command format\n");
-			return;
-		}
-		 num_dest_handles = atoi(token);
-
-		if ((num_dest_handles < 2) || (num_dest_handles > 9)) {
-        	printf("Invalid input: number of recipients is out of range\n");
-        	return;
-    	}
-		
-    } else if (strcmp(command, "%L") == 0 || strcmp(command, "%l") == 0) {
-		flag = 10;
-		sendBuf[0] = flag;
-		sent = sendPDU(socketNum, sendBuf, 1);
-		return;
-    } else {
-        printf("Invalid command.\n");
-		fflush(stdout);
-		return;
-    }
- 
-	sendBuf[idx++] = flag; 
-	sendBuf[idx++] = src_handle_len;
-	memcpy(&sendBuf[idx], myHandle, src_handle_len);	
-	idx += src_handle_len;
-	
-	if (flag == 6 || flag == 5) {
-		sendBuf[idx++] = num_dest_handles;
-		msg = handle_parser(num_dest_handles, &inputMsg[start], sendBuf, &idx);
-		if (msg == NULL){
-			return;
-		}
-
-	} else {
-		msg = (char *)&inputMsg[3];
-	}
-
-	// Handle empty messages
-    if (msg == NULL) {
-        msg = "";
-    }
-
-	int msgLen = strlen(msg);
-	while (msgLen > 200) {
-		uint8_t sendBufDUPE[MAXBUF];
-		memcpy(sendBufDUPE, sendBuf, idx);
-		memcpy(&sendBufDUPE[idx], msg, 199);
-		sendBufDUPE[idx+199] = '\0';
-		sent = sendPDU(socketNum, sendBufDUPE, idx+200);
-		if (sent < 0)
-		{
-			perror("send call");
-			exit(-1);
-		}
-		msg += 199;
-		msgLen -= 199;
-	}
-
-	memcpy(&sendBuf[idx], msg, msgLen); 
-	idx += msgLen; 
-	sendBuf[idx++] = 0; 
-	sendLen = idx;
-
-	sent = sendPDU(socketNum, sendBuf, sendLen);
-	if (sent < 0)
+	int sent = sendtoErr(socketNum, sendBuf, bufSize+7, 0, (struct sockaddr *)server, sizeof(*server));
+	if (sent <= 0)
 	{
 		perror("send call");
 		exit(-1);
 	}
-}
 
-char* handle_parser(int num_handles, uint8_t msg[], uint8_t sendBuf[], int * idx) {
-    char msg_copy[MAXBUF];
-    strncpy(msg_copy, (char *)msg, MAXBUF - 1);
-    msg_copy[MAXBUF - 1] = '\0';  
-    char *token = strtok(msg_copy, " ");
-    // Extract handles
-    for (int i = 0; i < num_handles; i++) {
-        if (token == NULL) {
-            printf("Not enough handles provided\n");
-            return NULL;
-        }
-        uint8_t handle_len = strlen(token);
-        sendBuf[(*idx)++] = handle_len;  
-        memcpy(&sendBuf[*idx], token, handle_len);
-        *idx += handle_len;
-        token = strtok(NULL, " ");
-    }
-
-    // After extracting handles, check if there's a message
-    if (token == NULL) {
-        return ""; 
-    }
-    return (char *)(msg + (token - msg_copy));
-}
-
-
-int readFromStdin(uint8_t * buffer)
-{
-	char aChar = 0;
-	int inputLen = 0;        
 	
-	// Important you don't input more characters than you have space 
-	buffer[0] = '\0';
-	//printf("\n$: ");
-	while (inputLen < (MAXBUF - 1) && aChar != '\n')
-	{
-		aChar = getchar();
-		if (aChar != '\n')
-		{
-			buffer[inputLen] = aChar;
-			inputLen++;
-		}
+
+
+}
+
+void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize) {
+	uint32_t seq_num_NW = htonl(seq_num);
+	memcpy(sendBuf, &seq_num_NW, 4);
+	memset(sendBuf + 4, 0, 2);
+	memcpy(sendBuf+6, &flag, 1);
+	memcpy(sendBuf+7, buffer, bufSize);
+	uint16_t checksum = in_cksum(sendBuf, bufSize + 7);
+	memcpy(sendBuf + 4, &checksum, 2);
+}
+
+FILE * check_filename(char * filename) {
+	FILE* file_pointer = fopen(filename, "w");
+	if (file_pointer == NULL) {
+		perror("Error on open of output file: %s\n");
+		exit(1);
 	}
-
-	if (inputLen >= MAXBUF - 1 && aChar != '\n') {
-        printf("Error: Input exceeds the maximum of 1400 characters. Command ignored.\n");
-
-        while (getchar() != '\n');
-        return -1;
-    }
+	return file_pointer;
 	
-	// Null terminate the string
-	buffer[inputLen] = '\0';
-	inputLen++;
-	
-	return inputLen;
 }
 
-void checkArgs(int argc, char * argv[])
+
+
+int checkArgs(int argc, char * argv[])
 {
-	/* check command line arguments  */
-	if (argc != 4)
+
+    int portNumber = 0;
+	
+        /* check command line arguments  */
+	if (argc != 8)
 	{
-		printf("usage: %s handle host-name port-number \n", argv[0]);
+		printf("Usage: %s from-filename to-filename window-size buffer-size error-rate remote-machine remote-port\n", argv[0]);
 		exit(1);
 	}
 
-	if ((strlen(argv[1])) >= 101) {
-		printf("Invalid handle, handle longer than 100 characters: %s\n", argv[1]);
-		exit(1);
-	}
+	uint8_t wrong_input = 0;
+
+	wrong_input = check_filename_length(argv[1], "from-filename");
+	wrong_input = check_filename_length(argv[2], "to-filename");
+	wrong_input = check_window_size(argv[3]);
+	wrong_input = check_buffer_size(argv[4]);
+	wrong_input = check_error_rate(argv[5]);
+	
+	portNumber = atoi(argv[7]);
+		
+	return portNumber;
 }
+
+int check_window_size(char * size){
+	uint32_t window_size = atoi(size);
+	if ((window_size < 1) || (window_size >= 1073741824)) {
+		printf("window size is out of range. please input an amount between 1 and 1073741823\n");
+		return 1;
+	}
+	return 0;
+}
+
+int check_buffer_size(char * size) {
+	uint16_t buffer_size = atoi(size);
+	if ((buffer_size < 1) || (buffer_size > 1400)) {
+		printf("buffer size is out of range. please input an amount between 1 and 1400.\n");
+		return 1;
+	}
+	return 0;
+}
+
+
+int check_filename_length(char * filename, char * fromORto) {
+	if ((strlen(filename) > 100)) {
+		printf("%s exceeds maximum filename length of 100 characters\n", fromORto);
+		return 1;
+	}
+	return 0;
+}
+
+int check_error_rate(char * rate) {
+	uint8_t error_rate = atof(rate);
+	if ((error_rate < 0) || (error_rate > 1)){
+		printf("error-rate is out of range. please input a rate between 0 and 1.\n");
+		return 1;
+	}
+	return 0;
+}
+
+
+
+
+
