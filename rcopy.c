@@ -64,66 +64,174 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	sendtoErr_init(atof(argv[5]), DROP_ON, FLIP_ON, DEBUG_ON, RSEED_ON);
 	setupPollSet();
 	addToPollSet(socketNum);
-	int serverSocket = 0;
-	uint8_t recvBuffer[MAXBUF];
-	int messageLen = 0;
 	socklen_t servAddrLen = sizeof(server);
+	FILE * to_filename = NULL;
 
-	// filename exchange
-	uint8_t count = 1;
-	filenameExchangePacket(argv, server, socketNum);
+	filenameExchange(argv, socketNum, server, servAddrLen, to_filename);
+
+	receiveData();
+	
+	// now onto use / data receiving
+}
+
+void receiveData(int socketNum, struct sockaddr_in6 * server, FILE* to_filename, char*argv[]){
+	uint8_t count = 0;
+	uint32_t window_size = atoi(argv[3]);
+	uint16_t buffer_size + 7 = atoi(argv[4]);
+	ReceiverBuffer* myBuffer = create_receiver_buffer(buffer_size);
+	uint8_t dataBuffer[buffer_size];
+	uint32_t highest = 1;
+	uint32_t expected = 1;
+
 	while (count < 10) {
-		int serverSocket = pollCall(1000); 
-			if (serverSocket == -1) {
-				close(socketNum);
-				removeFromPollSet(socketNum);
-				int newSocketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
-				addToPollSet(newSocketNum);
-				filenameExchangePacket(argv, server, newSocketNum);
+		int serverSocket = pollCall(1000);
+		if (serverSocket == -1) {
+			// #nodata #sad #:(
+			count++;
+			continue;
+		} else {
+			// #data #happy!
+			int messageLen = 0;
+			if ((messageLen = recvfrom(serverSocket, dataBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
+			{
+				perror("recv call");
+				exit(-1);
+			}
+			uint16_t calculatedChecksum = in_cksum((unsigned short *)dataBuffer, messageLen);
+	
+			if (calculatedChecksum) {
+				printf("Checksum mismatch. Discarding packet.\n");
 				count++;
-			}
-			else {
-				if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
-				{
-					perror("recv call");
-					exit(-1);
-				}
-				uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
+				continue;
+			} else {
+				uint32_t actual = 1;
+				uint8_t writingBuffer[buffer_size-7];
+				uint8_t flag = 0;
 
-				if (calculatedChecksum) {
-					printf("Checksum mismatch. Discarding packet.\n");
-					count++;
-					return;
+				memcpy(&flag, dataBuffer + 6, 1);
+				memcpy(&actual, dataBuffer, 4);
+				memcpy(writingBuffer, dataBuffer+7, messageLen-7);
+				int state = 0;
+
+				if (actual == expected) {
+					state = 1;
+				} else if (actual > expected) {
+					state = 2;
 				}
-				break;
+
+				switch (state) {
+					case 1:		// inorder
+						break;
+					case 2:		// buffering
+						break;
+					case 3:		// flushing
+				}
+
+				if (actual == expected) {
+					// in order state
+					size_t bytesWritten = fwrite(writingBuffer, 1, messageLen-7, to_filename);
+					highest = expected;
+					expected++;
+					// send RR
+
+				} else if (actual > expected) {
+					// buffering state
+					// send SREJ for expected
+					// buffer received PDU
+					//highest = whatever I just got
+
+					// stay in buffering til u get what u want. then go to flushing state
+
+				}
+
+
+
+				
 			}
-		
+			break;
+		}
 	}
+
 	if (count == 10) {
-		printf("Failed to send filename. Terminating.\n");
+		printf("Data receiving timed out. Terminating.\n");
 		exit(1);
 	}
 
-	uint8_t flag = 0;
-	memcpy(&flag, recvBuffer + 6, 1);
 
-	// response to filename packet
-	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
-		printf("Error: file: %s not found.\n", argv[1]);
-		exit(1);
+
+
+	
+	if (flag == 16) {
+		// Regular data packet
+	} else if (flag == 17) {
+		// Resent data packet (after sender receiving a SREJ, not a timeout)
+
+	} else if (flag == 18) {
+		// Resent data packet after a timeout (so lowest in window resent data packet.)
+
+	} else if (flag == 10) {
+		// Packet is your EOF indication or is the last data packet (sender to receiver)
+	} else {
+		// random flag. ignore this packet
 	}
+}
 
-	// if filename good
-	FILE * to_filename = check_filename(argv[1]);
-	printf("File OK!\n");
+
+
+void filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * server, socklen_t servAddrLen, FILE * to_filename) {
+		// filename exchange
+		uint8_t count = 1;
+		uint8_t recvBuffer[MAXBUF];
+		int serverSocket = 0;
+
+		filenameExchangePacket(argv, server, socketNum);
+		while (count < 10) {
+			serverSocket = pollCall(1000); 
+				if (serverSocket == -1) {
+					close(socketNum);
+					removeFromPollSet(socketNum);
+					int newSocketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
+					addToPollSet(newSocketNum);
+					filenameExchangePacket(argv, server, newSocketNum);
+					count++;
+				}
+				else {
+					int messageLen = 0;
+					if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
+					{
+						perror("recv call");
+						exit(-1);
+					}
+					uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
 	
+					if (calculatedChecksum) {
+						printf("Checksum mismatch. Discarding packet.\n");
+						count++;
+						continue;
+					}
+					break;
+				}
+			
+		}
+		if (count == 10) {
+			printf("Failed to send filename. Terminating.\n");
+			exit(1);
+		}
 	
+		uint8_t flag = 0;
+		
+		memcpy(&flag, recvBuffer + 6, 1);
 	
+		// response to filename packet
+		if (flag == 33) {// TODO: update flag = 33 is bad from-filename
+			printf("Error: file: %s not found.\n", argv[1]);
+			exit(1);
+		}
 	
-	// uint8_t state = 0;
-	// switch(state) {
-	// 	case ()
-	// }
+		// if filename good
+		to_filename = check_filename(argv[1]);
+		printf("File OK!\n");
+		return;
 }
 
 void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum) {
@@ -166,7 +274,7 @@ void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer
 	uint32_t seq_num_NW = htonl(seq_num);
 	memcpy(sendBuf, &seq_num_NW, 4);
 	memset(sendBuf + 4, 0, 2);
-	memcpy(sendBuf+6, &flag, 1);
+	sendBuf[7] = flag;
 	memcpy(sendBuf+7, buffer, bufSize);
 	uint16_t checksum = in_cksum((unsigned short *)sendBuf, bufSize + 7);
 	memcpy(sendBuf + 4, &checksum, 2);

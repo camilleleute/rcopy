@@ -20,11 +20,11 @@
 #define MAXBUF 1407
 
 void processClient(int socketNum);
-int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * to_filename);
+int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * from_filename);
 int checkArgs(int argc, char *argv[]);
 FILE * check_filename(char * filename);
 void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize);
-void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * to_filename);
+void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * from_filename);
 
 int main ( int argc, char *argv[]  )
 { 
@@ -56,7 +56,7 @@ void processClient(int socketNum)
 		int clientSocket = pollCall(-1);
 		if ((messageLen = recvfrom(clientSocket, recvBuff, MAXBUF, 0, (struct sockaddr *)&client, &addrLen)) < 0)
 		{
-			perror("recv call");
+			// no message, recv again
 			continue;
 		}
 
@@ -64,8 +64,8 @@ void processClient(int socketNum)
 		char filename[101];
 		uint32_t window_size = 0;
 		uint16_t buffer_size = 0;
-		FILE * to_filename = NULL;
-		int valid = filenamePacketCheck(messageLen, recvBuff, filename, window_size, buffer_size, to_filename);
+		FILE * from_filename = NULL;
+		int valid = filenamePacketCheck(messageLen, recvBuff, filename, window_size, buffer_size, from_filename);
 		if (valid == 1) {
 			printf("Invalid filename packet.\n");
 			continue;
@@ -110,7 +110,7 @@ void processClient(int socketNum)
 				}
 				
 				// Handle file transfer with the client
-				sendingData(newSocket, filename, window_size, buffer_size, &client, to_filename);
+				sendingData(newSocket, filename, window_size, buffer_size, &client, from_filename);
 				close(newSocket);
 				exit(0);
 
@@ -123,34 +123,48 @@ void processClient(int socketNum)
 
 }
 
-void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * to_filename) {
-    uint8_t dataBuffer[MAXBUF];
+void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * from_filename) {
     uint32_t seqNum = 1;
+	SenderWindow* myWindow = create_sender_window(window_size);
+	setupPollSet();
+	addToPollSet(socketNum);
 
-    while (1) {
-        size_t bytesRead = fread(dataBuffer, 1, buffer_size, file);
+    while (windowOpen(myWindow)) {
+		uint8_t dataBuffer[buffer_size];
+        size_t bytesRead = fread(dataBuffer, 1, buffer_size, from_filename);
         if (bytesRead <= 0) {
             break;  // End of file
         }
 
         // Create and send the data packet
-        uint8_t sendBuf[MAXBUF];
+        uint8_t sendBuf[bytesRead+7];
         createPDU(sendBuf, seqNum, 16, dataBuffer, bytesRead);
+		// store PDU in window
+		add_packet_to_window(myWindow, seqNum, sendBuf, bytesRead+7);
         int sent = sendtoErr(socketNum, sendBuf, bytesRead + 7, 0, (struct sockaddr *)client, sizeof(*client));
         if (sent <= 0) {
             perror("send call");
             exit(-1);
         }
-
         seqNum++;
+		while (pollCall(0) != -1) {
+			// process RRs and SREJs
+		}
     }
+	while (!windowOpen(myWindow)){
+		if (pollCall(1000) != -1){
+			// process RRs/SREJs
+		} else {
+			// resend lowest packet
+		}
+	}
 
     fclose(file);
 }
 
 
 
-int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * to_filename) {
+int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * from_filename) {
 	uint16_t checksum = in_cksum((unsigned short *)buff, messageLen);
 	uint8_t flag;
 	memcpy(&flag, buff+6, 1);
@@ -159,9 +173,9 @@ int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_
 	} else {
 		strcpy(filename, (const char *)(buff + 13));
 		printf("Checking for file: %s\n", filename);
-		to_filename = check_filename(filename);
+		from_filename = check_filename(filename);
 
-		if (to_filename == NULL) {
+		if (from_filename == NULL) {
 			return 2;
 		}
 

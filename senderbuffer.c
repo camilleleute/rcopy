@@ -31,3 +31,11 @@ void slide_window(SenderWindow *window, int new_lower) {
     window->lower = new_lower;
     window->upper = (new_lower + window->window_size - 1) % window->window_size;
 }
+
+void windowOpen(SenderWindow *window) {
+    if (window->current => window->upper) {
+        return false;
+    } else {
+        return true;
+    }
+}
