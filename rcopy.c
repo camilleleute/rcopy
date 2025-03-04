@@ -34,6 +34,7 @@ int check_buffer_size(char * size);
 int check_filename_length(char * filename, char * fromORto);
 int check_error_rate(char * rate);
 FILE * check_filename(char * filename);
+void printBufferInHex(const uint8_t *buffer, size_t length);
 
 
 int main (int argc, char *argv[])
@@ -60,11 +61,13 @@ int main (int argc, char *argv[])
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 {
-
 	sendtoErr_init(atof(argv[5]), DROP_ON, FLIP_ON, DEBUG_ON, RSEED_ON);
 	setupPollSet();
 	addToPollSet(socketNum);
 	int serverSocket = 0;
+	uint8_t recvBuffer[MAXBUF];
+	int messageLen = 0;
+	socklen_t servAddrLen = sizeof(server);
 
 	// filename exchange
 	uint8_t count = 1;
@@ -80,39 +83,39 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 				count++;
 			}
 			else {
+				if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
+				{
+					perror("recv call");
+					exit(-1);
+				}
+				uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
+
+				if (calculatedChecksum) {
+					printf("Checksum mismatch. Discarding packet.\n");
+					count++;
+					return;
+				}
 				break;
 			}
 		
 	}
-
 	if (count == 10) {
 		printf("Failed to send filename. Terminating.\n");
 		exit(1);
 	}
-
-	uint8_t recvBuffer[MAXBUF];
-	int messageLen = 0;
-	socklen_t servAddrLen = sizeof(server);
-	
-	if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
-	{
-		perror("recv call");
-		exit(-1);
-	}
-	// check the checksum
 
 	uint8_t flag = 0;
 	memcpy(&flag, recvBuffer + 6, 1);
 
 	// response to filename packet
 	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
-		printf("Error: file %s not found.\n", argv[1]);
+		printf("Error: file: %s not found.\n", argv[1]);
 		exit(1);
 	}
 
 	// if filename good
-	//FILE * to_filename = check_filename(argv[1]);
-	printf("Fie OK!\n");
+	FILE * to_filename = check_filename(argv[1]);
+	printf("File OK!\n");
 	
 	
 	
@@ -137,7 +140,7 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 	memcpy(filenamePacket+6, from_filename, filename_size + 1);
 
 	uint8_t sendBuf[MAXBUF];
-	filename_size =+ 7;
+	filename_size += 7;
 
 	createPDU(sendBuf, 1, 8, filenamePacket, filename_size);
 	
@@ -147,10 +150,16 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 		perror("send call");
 		exit(-1);
 	}
+}
 
-	
-
-
+void printBufferInHex(const uint8_t *buffer, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        printf("%02X ", buffer[i]); // Print each byte as a 2-digit hexadecimal number
+        if ((i + 1) % 16 == 0) {   // Print a newline every 16 bytes for readability
+            printf("\n");
+        }
+    }
+    printf("\n"); // Ensure the output ends with a newline
 }
 
 void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize) {
