@@ -21,8 +21,19 @@
 #include "cpe464.h"
 #include "pollLib.h"
 
-
 #define MAXBUF 1407
+#define RR 5
+#define SREJ 6
+#define SFLNM 8
+#define RFLNM 9
+#define EOFF 10
+#define ST_RECVDATA 0
+#define ST_FILENAME 1
+#define ST_INORDER 2
+#define ST_BUFFER 3
+#define ST_FLUSH 4
+#define ST_EOF 5
+
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server, char * argv[]);
 void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum);
@@ -35,6 +46,12 @@ int check_filename_length(char * filename, char * fromORto);
 int check_error_rate(char * rate);
 FILE * check_filename(char * filename);
 void printBufferInHex(const uint8_t *buffer, size_t length);
+
+// global variables
+uint32_t seq_num = 0;
+ReceiverBuffer* receiverBuffer = NULL;
+FILE * to_filename = NULL;
+
 
 
 int main (int argc, char *argv[])
@@ -65,25 +82,85 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	setupPollSet();
 	addToPollSet(socketNum);
 	socklen_t servAddrLen = sizeof(server);
-	FILE * to_filename = NULL;
+	uint8_t state = ST_FILENAME;
+	uint32_t window_size = atoi(argv[3]);
+	uint8_t recvDataBuffer[receiverBuffer->buffer_size];
+	int messageLen = 0;
 
-	filenameExchange(argv, socketNum, server, servAddrLen, to_filename);
 
-	receiveData();
-	
-	// now onto use / data receiving
+	while (NOT EOF) {
+		switch(state) {
+			case ST_RECVDATA: // receiving data
+				receivingData(recvDataBuffer, messageLen);
+				state = inOrderPacketCheck(recvDataBuffer);
+				if (state == 0) {
+					state = ST_INORDER;
+				} else {
+					state = ST_BUFFER;
+				}
+			break;
+			case ST_FILENAME: // filename exchange
+				filenameExchange(argv, socketNum, server, servAddrLen);
+				state = ST_RECVDATA;
+				break;
+			case ST_INORDER: // inorder
+				inOrderData(socketNum, server, recvBuffer+7, messageLen-7);
+				state = ST_RECVDATA;
+				break;
+			case ST_BUFFER: // buffering
+				bufferingData(socketNum, server, recvBuffer, messageLen);
+				state = inOrderPacketCheck(recvDataBuffer);
+				if (state == 0) {
+					state = ST_FLUSHING;
+				} else {
+					state = ST_BUFFER;
+				}
+				break;
+			case ST_FLUSH: // flushing
+				flushingBuffer(socketNum, server, recvDataBuffer, messageLen);
+				state = ST_RECVDATA;
+				break;
+			case ST_EOF:
+				break;
+			default: // mystery!
+				printf("Something broke prolly\n");
+				break;
+		}
+	}
+
 }
 
-void receiveData(int socketNum, struct sockaddr_in6 * server, FILE* to_filename, char*argv[]){
-	uint8_t count = 0;
-	uint32_t window_size = atoi(argv[3]);
-	uint16_t buffer_size + 7 = atoi(argv[4]);
-	ReceiverBuffer* myBuffer = create_receiver_buffer(buffer_size);
-	uint8_t dataBuffer[buffer_size];
-	uint32_t highest = 1;
-	uint32_t expected = 1;
+void flushingBuffer(int socketNum, struct sockaddr_in6 *server, uint8_t recvDataBuffer[], int messageLen) {
+    // Write the received in-order data to disk
+    inOrderData(socketNum, server, recvDataBuffer + 7, messageLen);
+    receiverBuffer->expected_sequence++;
 
-	while (count < 10) {
+    // Fetch and write subsequent in-order packets from the buffer
+    while (1) {
+        int fetched_size = fetch_data_from_buffer(receiverBuffer, to_filename);
+        if (fetched_size == 0) {
+            // No more in-order packets in the buffer
+            break;
+        }
+    }
+}
+
+uint8_t inOrderPacketCheck (uint8_t recvDataBuffer[]) {
+	uint32_t actualNW = 0;
+	memcpy(&actualNW, recvDataBuffer, 4);
+	uint32_t actualHOST = ntohl(actualNW);
+
+	if (actual == receiverBuffer->expected) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+void receivingData(int recvDataBuffer[], int messageLen){
+	uint8_t count = 1;
+	messageLen = 0;
+	do {
 		int serverSocket = pollCall(1000);
 		if (serverSocket == -1) {
 			// #nodata #sad #:(
@@ -91,153 +168,154 @@ void receiveData(int socketNum, struct sockaddr_in6 * server, FILE* to_filename,
 			continue;
 		} else {
 			// #data #happy!
-			int messageLen = 0;
-			if ((messageLen = recvfrom(serverSocket, dataBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
+			memset(recvDataBuffer, 0, receiverBuffer->buffer_size);
+			if ((messageLen = recvfrom(serverSocket, recvDataBuffer, receiverBuffer->buffer_size, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
 			{
 				perror("recv call");
 				exit(-1);
 			}
-			uint16_t calculatedChecksum = in_cksum((unsigned short *)dataBuffer, messageLen);
+			uint16_t calculatedChecksum = in_cksum((unsigned short *)recvDataBuffer, messageLen);
 	
 			if (calculatedChecksum) {
 				printf("Checksum mismatch. Discarding packet.\n");
 				count++;
 				continue;
-			} else {
-				uint32_t actual = 1;
-				uint8_t writingBuffer[buffer_size-7];
-				uint8_t flag = 0;
-
-				memcpy(&flag, dataBuffer + 6, 1);
-				memcpy(&actual, dataBuffer, 4);
-				memcpy(writingBuffer, dataBuffer+7, messageLen-7);
-				int state = 0;
-
-				if (actual == expected) {
-					state = 1;
-				} else if (actual > expected) {
-					state = 2;
-				}
-
-				switch (state) {
-					case 1:		// inorder
-						break;
-					case 2:		// buffering
-						break;
-					case 3:		// flushing
-				}
-
-				if (actual == expected) {
-					// in order state
-					size_t bytesWritten = fwrite(writingBuffer, 1, messageLen-7, to_filename);
-					highest = expected;
-					expected++;
-					// send RR
-
-				} else if (actual > expected) {
-					// buffering state
-					// send SREJ for expected
-					// buffer received PDU
-					//highest = whatever I just got
-
-					// stay in buffering til u get what u want. then go to flushing state
-
-				}
-
-
-
-				
-			}
-			break;
+			} 
 		}
-	}
+	} while (count < 10);
 
 	if (count == 10) {
 		printf("Data receiving timed out. Terminating.\n");
 		exit(1);
 	}
+	return;
+}
 
+void bufferingData(int socketNum, struct sockaddr_in6 * server, uint8_t recvDataBuffer[], uint16_t messageLen) {
+	// send SREJ for expected
+	uint32_t net_expected = htonl(receiverBuffer->expected);
+	uint8_t sendDataBuffer[receiverBuffer->buffer_size];
+	uint32_t net_seq_num = htonl(seq_num);
+	seq_num++;
 
+	createPDU(sendDataBuffer, net_seq_num, SREJ, (uint8_t *)net_expected, 4);
 
+	uint8_t count = 0;
+	do {
+		int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
+		count++;
+		if (count == 10) {
+			printf("Server terminated. Now terminating\n");
+			exit(1);
+		}
+	} while (sent <= 0);
+	// buffer received PDU
+	add_packet_to_buffer(myBuffer, recvDataBuffer);
+	return;
+}
 
-	
-	if (flag == 16) {
-		// Regular data packet
-	} else if (flag == 17) {
-		// Resent data packet (after sender receiving a SREJ, not a timeout)
+void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t writingBuffer, uint16_t messageLen){
+	// write to disk
+	size_t bytesWritten = fwrite(writingBuffer, 1, messageLen, to_filename);
+	(receiverBuffer->expected)++;
 
-	} else if (flag == 18) {
-		// Resent data packet after a timeout (so lowest in window resent data packet.)
-
-	} else if (flag == 10) {
-		// Packet is your EOF indication or is the last data packet (sender to receiver)
-	} else {
-		// random flag. ignore this packet
-	}
+	// send RR
+	uint32_t net_seq_num = htonl(seq_num);
+	seq_num++;
+	uint32_t net_expected = htonl(receiverBuffer->expected);
+	memset(sendDataBuffer, 0, receiverBuffer->buffer_size);
+	createPDU(sendDataBuffer, net_seq_num, RR, (uint8_t *)net_expected, 4);
+	uint8_t count = 0;
+	do {
+		int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
+		count++;
+		if ((count == 10) && (sent <= 0)) {
+			printf("Server terminated. Now terminating\n");
+			exit(1);
+		}
+	} while (sent <= 0);
+	return;
 }
 
 
+uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * server, socklen_t servAddrLen) {
+	// filename exchange
+	uint8_t count = 1;
+	uint8_t recvBuffer[MAXBUF];
+	int serverSocket = 0;
+	int messageLen = 0;
 
-void filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * server, socklen_t servAddrLen, FILE * to_filename) {
-		// filename exchange
-		uint8_t count = 1;
-		uint8_t recvBuffer[MAXBUF];
-		int serverSocket = 0;
-
+	do {
 		filenameExchangePacket(argv, server, socketNum);
-		while (count < 10) {
-			serverSocket = pollCall(1000); 
-				if (serverSocket == -1) {
-					close(socketNum);
-					removeFromPollSet(socketNum);
-					int newSocketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
-					addToPollSet(newSocketNum);
-					filenameExchangePacket(argv, server, newSocketNum);
+		serverSocket = pollCall(1000); 
+			if (serverSocket == -1) {
+				close(socketNum);
+				removeFromPollSet(socketNum);
+				socketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
+				addToPollSet(socketNum);
+				count++;
+			} else {
+				if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
+				{
+					perror("recv call");
+					exit(-1);
+				}
+				uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
+
+				if (calculatedChecksum) {
+					printf("Checksum mismatch. Discarding packet.\n");
 					count++;
+					continue;
 				}
-				else {
-					int messageLen = 0;
-					if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
-					{
-						perror("recv call");
-						exit(-1);
-					}
-					uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
+			}
+	} while (count < 10);
+
+	if (count == 10) {
+		printf("Failed to send filename. Terminating.\n");
+		exit(1);
+	}
+
+	uint8_t flag = 0;
+	memcpy(&flag, recvBuffer + 6, 1);
+
+	// response to filename packet
+	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
+		printf("Error: file: %s not found.\n", argv[1]);
+		exit(1);
+	} 
 	
-					if (calculatedChecksum) {
-						printf("Checksum mismatch. Discarding packet.\n");
-						count++;
-						continue;
-					}
-					break;
-				}
-			
-		}
-		if (count == 10) {
-			printf("Failed to send filename. Terminating.\n");
-			exit(1);
-		}
-	
-		uint8_t flag = 0;
-		
-		memcpy(&flag, recvBuffer + 6, 1);
-	
-		// response to filename packet
-		if (flag == 33) {// TODO: update flag = 33 is bad from-filename
-			printf("Error: file: %s not found.\n", argv[1]);
-			exit(1);
-		}
-	
-		// if filename good
+	else {
 		to_filename = check_filename(argv[1]);
-		printf("File OK!\n");
-		return;
+		uint16_t buffer_size + 7 = atoi(argv[4]);
+		receiverBuffer = create_receiver_buffer(buffer_size);
+		if (flag == 9) {
+			printf("File OK!\n");
+		} else if (flag == 16) {
+			uint8_t inOrder = inOrderPacketCheck(recvBuffer);
+			if (!inOrder) {
+				// in order data
+				inOrderData(socketNum, server, recvBuffer+7, messageLen-7);
+			} else {
+				// buffer data
+				bufferingData(socketNum, server, recvBuffer, messageLen, buffer_size);
+			}
+			return ST_RECVDATA; 
+		} else if (flag == 10) {
+			// deal with EOF
+			return;
+		} else {
+			// unexpected flag that managed to pass checksum ...
+			printf("How'd we end up here!\n");
+		}
+	}
+
+	return;
 }
 
 void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum) {
 
 	uint32_t window_size = atoi(argv[3]);
-	uint16_t buffer_size = atoi(argv[4]);
+	uint16_t buffer_size = receiverBuffer->buffer_size;
 	char from_filename[101];
 	strcpy(from_filename, argv[1]);
 	uint8_t filename_size = strlen(from_filename);
@@ -250,7 +328,7 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 	uint8_t sendBuf[MAXBUF];
 	filename_size += 7;
 
-	createPDU(sendBuf, 1, 8, filenamePacket, filename_size);
+	createPDU(sendBuf, 0, 8, filenamePacket, filename_size);
 	
 	int sent = sendtoErr(socketNum, sendBuf, filename_size+7, 0, (struct sockaddr *)server, sizeof(*server));
 	if (sent <= 0)
