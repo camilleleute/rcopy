@@ -99,7 +99,7 @@ void processClient(int socketNum)
                     exit(-1);
                 }
 				char messageBuf[256]; 
-				int size = snprintf(messageBuf, sizeof(messageBuf), "file OK");
+				int size = snprintf(messageBuf, sizeof(messageBuf), "file OK"); // what if i get rid of this 
 				uint8_t sendBuf[MAXBUF];
 				createPDU(sendBuf, 1, 9, (uint8_t *)messageBuf, size +1);
 				int sent = sendtoErr(clientSocket, sendBuf, size + 8, 0, (struct sockaddr *)&client, sizeof(client));
@@ -152,7 +152,7 @@ void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t b
 		}
     }
 	while (!windowOpen(myWindow)){
-		if (pollCall(1000) != -1){
+		while (pollCall(1000) != -1){
 			// process RRs/SREJs
 		} else {
 			// resend lowest packet
