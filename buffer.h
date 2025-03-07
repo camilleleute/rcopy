@@ -43,5 +43,6 @@ int windowOpen(SenderWindow *window);  // Change return type to int
 ReceiverBuffer* create_receiver_buffer(int window_size, int buffer_size);
 void add_packet_to_buffer(ReceiverBuffer *buffer, int sequence_number, const char *data, int data_size);
 int fetch_data_from_buffer(ReceiverBuffer *buffer, FILE *to_filename);
+int is_expected_packet_received(ReceiverBuffer *buffer);
 
 #endif // WINDOW_BUFFER_H

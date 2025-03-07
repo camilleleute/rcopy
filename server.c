@@ -151,8 +151,9 @@ void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filenam
     while (windowOpen(senderBuffer)) {
 		uint8_t dataBuffer[senderBuffer->buffer_size];
         size_t bytesRead = fread(dataBuffer, 1, senderBuffer->buffer_size, from_filename);
-        if (bytesRead <= 0) {
+        if ((bytesRead <= 0)) {
 			printf("End of file\n");
+			// if i reach EOF then all data should be sent and successfully received OR in my window
             break;  // End of file
         }
 
@@ -176,23 +177,67 @@ void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filenam
 			uint8_t flag;
 			uint32_t recv_seq_num;
 			memcpy(&flag, recvBuff+6, 1);
-			memcpy(&recv_seq_num, recvBuff, 4);
+			memcpy(&recv_seq_num, recvBuff+7, 4);
 			recv_seq_num = ntohl(recv_seq_num);
 			if (flag == RR) {
+				// acknowlegde received packet and all lower ones
 				acknowledge_packet(senderBuffer, recv_seq_num);
+			} else if (flag == SREJ) {
+				// get selected packet from buffer and resend it
+				int data_size;
+				Packet *packet = get_packet(senderBuffer, recv_seq_num, &data_size);
+				if (packet == NULL ){
+					printf("%d doesnt exist!\n", recv_seq_num);
+				} else {
+					int sent = sendtoErr(socketNum, packet, data_size, 0, (struct sockaddr *)client, sizeof(*client));
+					if (sent <= 0) {
+						perror("send call");
+						exit(-1);
+					}
+				}
 			}
-
 		}
     }
 	while (!windowOpen(senderBuffer)){
-		while (pollCall(1000) != -1){
-			// process RRs/SREJs
+		while (pollCall(1000) != -1) {
+			int messageLen = 0;
+			if ((messageLen = recvfrom(socketNum, recvBuff, MAXBUF, 0, (struct sockaddr *)&client, (socklen_t *)sizeof(client))) < 0)
+			{
+				continue;
+			}
+			uint8_t flag;
+			uint32_t recv_seq_num;
+			memcpy(&flag, recvBuff+6, 1);
+			memcpy(&recv_seq_num, recvBuff+7, 4);
+			recv_seq_num = ntohl(recv_seq_num);
+			if (flag == RR) {
+				// acknowlegde received packet and all lower ones
+				acknowledge_packet(senderBuffer, recv_seq_num);
+			} else if (flag == SREJ) {
+				// get selected packet from buffer and resend it
+				int data_size;
+				Packet *packet = get_packet(senderBuffer, recv_seq_num, &data_size);
+				if (packet == NULL ){
+					printf("%d doesnt exist!\n", recv_seq_num);
+				} else {
+					int sent = sendtoErr(socketNum, packet, data_size, 0, (struct sockaddr *)client, sizeof(*client));
+					if (sent <= 0) {
+						perror("send call");
+						exit(-1);
+					}
+				}
+			}
 		}
 		// else resend lowest packet
 	}
 
     fclose(from_filename);
 }
+
+void endOfFileExchange() {
+
+}
+
 
 
 
@@ -264,5 +309,6 @@ void check_error_rate(char * rate) {
 		printf("error-rate is out of range. please input a rate between 0 and 1.\n");
 		exit(1);
 	}
+	sendtoErr_init(error_rate, DROP_ON, FLIP_ON, DEBUG_ON, RSEED_ON);
 }
 

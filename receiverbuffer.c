@@ -63,8 +63,8 @@ void add_packet_to_buffer(ReceiverBuffer *buffer, int sequence_number, const cha
     }
 }
 
-// Fetch data from the buffer and write it to a file
-int fetch_data_from_buffer(ReceiverBuffer *buffer, FILE *to_filename) {
+// Fetch data from the buffer and return it
+const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
     int index = buffer->expected % buffer->window_size;
 
     // Check if the buffer slot is valid and matches the expected sequence number
@@ -72,17 +72,22 @@ int fetch_data_from_buffer(ReceiverBuffer *buffer, FILE *to_filename) {
         buffer->buffer[index]->valid && 
         buffer->buffer[index]->sequence_number == buffer->expected) {
         
-        // Write the data to the file
-        fwrite(buffer->buffer[index]->data, 1, buffer->buffer[index]->data_size, to_filename);
-        
+        // Return the data and its size
+        *data_size = buffer->buffer[index]->data_size;
+
         // Invalidate the buffer slot
         buffer->buffer[index]->valid = 0;
         buffer->expected++;
 
-        // Return the size of the data fetched
-        return buffer->buffer[index]->data_size;
+        // Return a pointer to the data
+        return buffer->buffer[index]->data;
     }
 
-    // Return 0 if no data was fetched
-    return 0;
+    // Return NULL if no data was fetched
+    return NULL;
+}
+
+int is_expected_packet_received(ReceiverBuffer *buffer) {
+    int index = buffer->expected % buffer->window_size;
+    return buffer->buffer[index].sequence_number == buffer->expected;
 }

@@ -60,12 +60,34 @@ void add_packet_to_window(SenderWindow *window, int sequence_number, const char 
 
 // Free packet if receive RR
 void acknowledge_packet(SenderWindow *window, int sequence_number) {
+    // Iterate through all packets in the window
+    int i;
+    for (i = window->lower; i <= sequence_number; i++) {
+        int index = i % window->window_size;
+
+        // Free the packet if it exists
+        if (window->buffer[index] && window->buffer[index]->sequence_number <= sequence_number) {
+            free(window->buffer[index]);
+            window->buffer[index] = NULL;  // Set to NULL after freeing
+        }
+    }
+
+    // Slide the window forward to the next unacknowledged packet
+    slide_window(window, sequence_number + 1);
+}
+
+Packet* get_packet(SenderWindow *window, int sequence_number, int * data_size) {
+    // Calculate the index in the circular buffer
     int index = sequence_number % window->window_size;
 
-    if (window->buffer[index]) {
-        free(window->buffer[index]);
-        window->buffer[index] = NULL;  // Set to NULL after freeing
+    // Check if the packet exists and matches the sequence number
+    if (window->buffer[index] && window->buffer[index]->sequence_number == sequence_number) {
+        *data_size = window->buffer[index]->data_size;
+        return window->buffer[index];
     }
+
+    // Return NULL if the packet is not found or has been acknowledged
+    return NULL;
 }
 
 // Slide the window forward

@@ -90,21 +90,22 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	setupPollSet();
 	addToPollSet(socketNum);
 	socklen_t servAddrLen = sizeof(server);
-	uint8_t state = ST_FILENAME;
-	uint32_t window_size = atoi(argv[3]);
-	uint8_t recvDataBuffer[window_size];
+	uint32_t state = ST_FILENAME;
+	uint32_t buffer_size = atoi(argv[4]) +7;
+	uint8_t recvDataBuffer[buffer_size];
 	int messageLen = 0;
 
 
-	//while (NOT EOF) {
-		
+	while (1) {
 		switch(state) {
 			case ST_RECVDATA: // receiving data
 				receivingData(recvDataBuffer, messageLen, server, servAddrLen);
 				state = inOrderPacketCheck(recvDataBuffer);
-				exit(1);
 				if (state == 0) {
 					state = ST_INORDER;
+				} else if { // got an EOF
+					state = -1;
+					break;
 				} else {
 					state = ST_BUFFER;
 				}
@@ -119,6 +120,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 				break;
 			case ST_BUFFER: // buffering
 				bufferingData(socketNum, server, recvDataBuffer, messageLen);
+				receivingData(recvDataBuffer, messageLen, server, servAddrLen);
 				state = inOrderPacketCheck(recvDataBuffer);
 				if (state == 0) {
 					state = ST_FLUSH;
@@ -130,28 +132,28 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 				flushingBuffer(socketNum, server, recvDataBuffer, messageLen);
 				state = ST_RECVDATA;
 				break;
-			case ST_EOF:
-				break;
 			default: // mystery!
 				printf("Something broke prolly\n");
 				break;
 		}
-	//}
-
+	}
 }
 
 void flushingBuffer(int socketNum, struct sockaddr_in6 *server, uint8_t recvDataBuffer[], int messageLen) {
-    // Write the received in-order data to disk
-    inOrderData(socketNum, server, recvDataBuffer + 7, messageLen);
+	// Write the received in-order data to disk
+    inOrderData(socketNum, server, recvDataBuffer, messageLen);
 
-    // Fetch and write subsequent in-order packets from the buffer
-    while (1) {
-        int fetched_size = fetch_data_from_buffer(receiverBuffer, to_filename);
-        if (fetched_size == 0) {
-            // No more in-order packets in the buffer
-            break;
-        }
-    }
+	while (is_expected_packet_received(receiverBuffer)) {
+		int data_size;
+    	const char *fetched_data = fetch_data_from_buffer(buffer, &data_size);
+
+		if (fetched_data == NULL) {
+			printf("Oops!\n");
+		} else {
+			inOrderData(socketNum, server, fetched_data, data_size);
+		}
+	}
+	
 }
 
 uint32_t inOrderPacketCheck (uint8_t recvDataBuffer[]) {
@@ -221,10 +223,7 @@ void bufferingData(int socketNum, struct sockaddr_in6 * server, uint8_t recvData
 }
 
 void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t * writingBuffer, uint16_t messageLen){
-	// write to disk
-	fwrite((const void *)writingBuffer, 1, messageLen, to_filename);
-	(receiverBuffer->expected)++;
-	// send RR
+// send RR
 	uint32_t net_expected = htonl(receiverBuffer->expected);
 	uint8_t sendDataBuffer[receiverBuffer->buffer_size];
 	createPDU(sendDataBuffer, RR, (uint8_t *)&net_expected, 4);
@@ -232,6 +231,18 @@ void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t * writingB
 	int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
 	if (sent == -1) {
 		printf("Bad things happened\n");
+		exit(1);
+	}
+
+	uint8_t flag = 0;
+	memcpy(&flag, writingBuffer + 6, 1);
+
+	if (flag != EOFF) {
+		// write to disk
+		fwrite((const void *)writingBuffer+7, 1, messageLen-7, to_filename);
+		(receiverBuffer->expected)++;
+	} else {
+		printf("Got EOF, ACKing that then dying");
 		exit(1);
 	}
 	return;
@@ -297,14 +308,15 @@ uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * serv
 			uint8_t inOrder = inOrderPacketCheck(recvBuffer);
 			if (inOrder == 0) {
 				// in order data
-				inOrderData(socketNum, server, recvBuffer+7, messageLen-7);
+				inOrderData(socketNum, server, recvBuffer, messageLen);
 			} else {
 				// buffer data
-				bufferingData(socketNum, server, recvBuffer+7, messageLen);
+				bufferingData(socketNum, server, recvBuffer, messageLen);
 			}
 			return ST_RECVDATA; 
-		} else if (flag == 10) {
+		} else if (flag == EOFF) {
 			// deal with EOF
+			printf("Got an EOF off the bat\n");
 			return 1;
 		} else {
 			// unexpected flag that managed to pass checksum ...
