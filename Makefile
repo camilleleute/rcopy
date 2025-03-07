@@ -6,7 +6,7 @@
 
 
 CC= gcc
-CFLAGS= -g -Wall -std=c99
+CFLAGS= -g -Wall
 LIBS = 
 
 OBJS = networks.o gethostbyname.o pollLib.o safeUtil.o receiverbuffer.o senderbuffer.o
@@ -32,7 +32,3 @@ cleano:
 
 clean:
 	rm -f rcopy server *.o
-
-
-
-

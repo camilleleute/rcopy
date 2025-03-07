@@ -9,27 +9,46 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
+
 
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
 #include "cpe464.h"
 #include "pollLib.h"
+#include "buffer.h"
 
 
 #define MAXBUF 1407
+#define RR 5
+#define SREJ 6
+#define SFLNM 8
+#define RFLNM 9
+#define EOFF 10
+#define ST_RECVDATA 0
+#define ST_FILENAME 1
+#define ST_INORDER 2
+#define ST_BUFFER 3
+#define ST_FLUSH 4
+#define ST_EOF 5
 
 void processClient(int socketNum);
-int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * from_filename);
+int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], FILE * from_filename);
 int checkArgs(int argc, char *argv[]);
 FILE * check_filename(char * filename);
 void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize);
-void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * from_filename);
+void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filename);
+void check_error_rate(char * rate);
+
+// global variable 
+SenderWindow * senderBuffer = NULL;
 
 int main ( int argc, char *argv[]  )
 { 
 	int socketNum = 0;				
 	int portNumber = 0;
+	signal(SIGCHLD, SIG_IGN);
 
 	portNumber = checkArgs(argc, argv);
 		
@@ -62,10 +81,8 @@ void processClient(int socketNum)
 
 		// check filename packet validity and the from-filename
 		char filename[101];
-		uint32_t window_size = 0;
-		uint16_t buffer_size = 0;
 		FILE * from_filename = NULL;
-		int valid = filenamePacketCheck(messageLen, recvBuff, filename, window_size, buffer_size, from_filename);
+		int valid = filenamePacketCheck(messageLen, recvBuff, filename, from_filename);
 		if (valid == 1) {
 			printf("Invalid filename packet.\n");
 			continue;
@@ -92,6 +109,7 @@ void processClient(int socketNum)
                 exit(-1);
 			} else if (pid == 0) {
 				// child
+				printf("I forked\n");
 				close(socketNum);
 				int newSocket = udpServerSetup(0);  // OS picks le port number
                 if (newSocket < 0) {
@@ -99,7 +117,7 @@ void processClient(int socketNum)
                     exit(-1);
                 }
 				char messageBuf[256]; 
-				int size = snprintf(messageBuf, sizeof(messageBuf), "file OK"); // what if i get rid of this 
+				int size = snprintf(messageBuf, sizeof(messageBuf), "file OK"); 
 				uint8_t sendBuf[MAXBUF];
 				createPDU(sendBuf, 1, 9, (uint8_t *)messageBuf, size +1);
 				int sent = sendtoErr(clientSocket, sendBuf, size + 8, 0, (struct sockaddr *)&client, sizeof(client));
@@ -110,7 +128,7 @@ void processClient(int socketNum)
 				}
 				
 				// Handle file transfer with the client
-				sendingData(newSocket, filename, window_size, buffer_size, &client, from_filename);
+				//sendingData(newSocket, client, from_filename);
 				close(newSocket);
 				exit(0);
 
@@ -123,16 +141,18 @@ void processClient(int socketNum)
 
 }
 
-void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t buffer_size, struct sockaddr_in6 *client, FILE * from_filename) {
-    uint32_t seqNum = 1;
-	SenderWindow* myWindow = create_sender_window(window_size);
+void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filename) {
+    uint32_t seqNum = 0;
 	setupPollSet();
 	addToPollSet(socketNum);
+	uint32_t recvBuff[senderBuffer->buffer_size];
 
-    while (windowOpen(myWindow)) {
-		uint8_t dataBuffer[buffer_size];
-        size_t bytesRead = fread(dataBuffer, 1, buffer_size, from_filename);
+
+    while (windowOpen(senderBuffer)) {
+		uint8_t dataBuffer[senderBuffer->buffer_size];
+        size_t bytesRead = fread(dataBuffer, 1, senderBuffer->buffer_size, from_filename);
         if (bytesRead <= 0) {
+			printf("End of file\n");
             break;  // End of file
         }
 
@@ -140,7 +160,7 @@ void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t b
         uint8_t sendBuf[bytesRead+7];
         createPDU(sendBuf, seqNum, 16, dataBuffer, bytesRead);
 		// store PDU in window
-		add_packet_to_window(myWindow, seqNum, sendBuf, bytesRead+7);
+		add_packet_to_window(senderBuffer, seqNum, (const char *)sendBuf, bytesRead+7);
         int sent = sendtoErr(socketNum, sendBuf, bytesRead + 7, 0, (struct sockaddr *)client, sizeof(*client));
         if (sent <= 0) {
             perror("send call");
@@ -148,23 +168,35 @@ void sendingData(int socketNum, char *filename, uint32_t window_size, uint16_t b
         }
         seqNum++;
 		while (pollCall(0) != -1) {
-			// process RRs and SREJs
+			int messageLen = 0;
+			if ((messageLen = recvfrom(socketNum, recvBuff, MAXBUF, 0, (struct sockaddr *)&client, (socklen_t *)sizeof(client))) < 0)
+			{
+				continue;
+			}
+			uint8_t flag;
+			uint32_t recv_seq_num;
+			memcpy(&flag, recvBuff+6, 1);
+			memcpy(&recv_seq_num, recvBuff, 4);
+			recv_seq_num = ntohl(recv_seq_num);
+			if (flag == RR) {
+				acknowledge_packet(senderBuffer, recv_seq_num);
+			}
+
 		}
     }
-	while (!windowOpen(myWindow)){
+	while (!windowOpen(senderBuffer)){
 		while (pollCall(1000) != -1){
 			// process RRs/SREJs
-		} else {
-			// resend lowest packet
 		}
+		// else resend lowest packet
 	}
 
-    fclose(file);
+    fclose(from_filename);
 }
 
 
 
-int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_t window_size, uint16_t buffer_size, FILE * from_filename) {
+int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], FILE * from_filename) {
 	uint16_t checksum = in_cksum((unsigned short *)buff, messageLen);
 	uint8_t flag;
 	memcpy(&flag, buff+6, 1);
@@ -172,15 +204,17 @@ int filenamePacketCheck(int messageLen, uint8_t buff[], char filename[], uint32_
 		return 1;
 	} else {
 		strcpy(filename, (const char *)(buff + 13));
-		printf("Checking for file: %s\n", filename);
+		//printf("Checking for file: %s\n", filename);
 		from_filename = check_filename(filename);
 
 		if (from_filename == NULL) {
 			return 2;
 		}
-
-		memcpy(&window_size, buff+7, 4);
-		memcpy(&buffer_size, buff+11, 2);
+		uint32_t window_size = 0;
+		uint16_t buffer_size = 0;
+		memcpy(&(window_size), buff+7, 4);
+		memcpy(&(buffer_size), buff+11, 2);
+		senderBuffer = create_sender_window(window_size, buffer_size);
 		return 0;
 	}
 	
@@ -213,6 +247,8 @@ int checkArgs(int argc, char *argv[])
 		printf("Usage %s error-rate [optional port number]\n", argv[0]);
 		exit(-1);
 	}
+
+	check_error_rate(argv[1]);
 	
 	if (argc == 3)
 	{
@@ -222,4 +258,11 @@ int checkArgs(int argc, char *argv[])
 	return portNumber;
 }
 
+void check_error_rate(char * rate) {
+	uint8_t error_rate = atof(rate);
+	if ((error_rate < 0) || (error_rate > 1)){
+		printf("error-rate is out of range. please input a rate between 0 and 1.\n");
+		exit(1);
+	}
+}
 

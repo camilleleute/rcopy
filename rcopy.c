@@ -20,6 +20,8 @@
 #include "safeUtil.h"
 #include "cpe464.h"
 #include "pollLib.h"
+#include "buffer.h"
+
 
 #define MAXBUF 1407
 #define RR 5
@@ -37,7 +39,7 @@
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server, char * argv[]);
 void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum);
-void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize);
+void createPDU(uint8_t sendBuf[], uint8_t flag, uint8_t buffer[], uint16_t bufSize);
 int readFromStdin(char * buffer);
 int checkArgs(int argc, char * argv[]);
 int check_window_size(char * size);
@@ -46,6 +48,12 @@ int check_filename_length(char * filename, char * fromORto);
 int check_error_rate(char * rate);
 FILE * check_filename(char * filename);
 void printBufferInHex(const uint8_t *buffer, size_t length);
+void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t * writingBuffer, uint16_t messageLen);
+void flushingBuffer(int socketNum, struct sockaddr_in6 *server, uint8_t recvDataBuffer[], int messageLen);
+uint32_t inOrderPacketCheck (uint8_t recvDataBuffer[]);
+void receivingData(uint8_t recvDataBuffer[], int messageLen, struct sockaddr_in6 *server, socklen_t servAddrLen);
+void bufferingData(int socketNum, struct sockaddr_in6 * server, uint8_t recvDataBuffer[], uint16_t messageLen);
+uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * server, socklen_t servAddrLen);
 
 // global variables
 uint32_t seq_num = 0;
@@ -84,15 +92,17 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 	socklen_t servAddrLen = sizeof(server);
 	uint8_t state = ST_FILENAME;
 	uint32_t window_size = atoi(argv[3]);
-	uint8_t recvDataBuffer[receiverBuffer->buffer_size];
+	uint8_t recvDataBuffer[window_size];
 	int messageLen = 0;
 
 
-	while (NOT EOF) {
+	//while (NOT EOF) {
+		
 		switch(state) {
 			case ST_RECVDATA: // receiving data
-				receivingData(recvDataBuffer, messageLen);
+				receivingData(recvDataBuffer, messageLen, server, servAddrLen);
 				state = inOrderPacketCheck(recvDataBuffer);
+				exit(1);
 				if (state == 0) {
 					state = ST_INORDER;
 				} else {
@@ -104,14 +114,14 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 				state = ST_RECVDATA;
 				break;
 			case ST_INORDER: // inorder
-				inOrderData(socketNum, server, recvBuffer+7, messageLen-7);
+				inOrderData(socketNum, server, recvDataBuffer+7, messageLen-7);
 				state = ST_RECVDATA;
 				break;
 			case ST_BUFFER: // buffering
-				bufferingData(socketNum, server, recvBuffer, messageLen);
+				bufferingData(socketNum, server, recvDataBuffer, messageLen);
 				state = inOrderPacketCheck(recvDataBuffer);
 				if (state == 0) {
-					state = ST_FLUSHING;
+					state = ST_FLUSH;
 				} else {
 					state = ST_BUFFER;
 				}
@@ -126,14 +136,13 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[])
 				printf("Something broke prolly\n");
 				break;
 		}
-	}
+	//}
 
 }
 
 void flushingBuffer(int socketNum, struct sockaddr_in6 *server, uint8_t recvDataBuffer[], int messageLen) {
     // Write the received in-order data to disk
     inOrderData(socketNum, server, recvDataBuffer + 7, messageLen);
-    receiverBuffer->expected_sequence++;
 
     // Fetch and write subsequent in-order packets from the buffer
     while (1) {
@@ -145,19 +154,19 @@ void flushingBuffer(int socketNum, struct sockaddr_in6 *server, uint8_t recvData
     }
 }
 
-uint8_t inOrderPacketCheck (uint8_t recvDataBuffer[]) {
+uint32_t inOrderPacketCheck (uint8_t recvDataBuffer[]) {
 	uint32_t actualNW = 0;
 	memcpy(&actualNW, recvDataBuffer, 4);
 	uint32_t actualHOST = ntohl(actualNW);
 
-	if (actual == receiverBuffer->expected) {
+	if (actualHOST == receiverBuffer->expected) {
 		return 0;
 	} else {
-		return 1;
+		return actualHOST;
 	}
 }
 
-void receivingData(int recvDataBuffer[], int messageLen){
+void receivingData(uint8_t recvDataBuffer[], int messageLen, struct sockaddr_in6 *server, socklen_t servAddrLen){
 	uint8_t count = 1;
 	messageLen = 0;
 	do {
@@ -195,52 +204,43 @@ void bufferingData(int socketNum, struct sockaddr_in6 * server, uint8_t recvData
 	// send SREJ for expected
 	uint32_t net_expected = htonl(receiverBuffer->expected);
 	uint8_t sendDataBuffer[receiverBuffer->buffer_size];
-	uint32_t net_seq_num = htonl(seq_num);
-	seq_num++;
+	createPDU(sendDataBuffer, SREJ, (uint8_t *)&net_expected, 4);
+	int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
+	if (sent == -1) {
+		printf("Bad things happened\n");
+		exit(1);
+	}
 
-	createPDU(sendDataBuffer, net_seq_num, SREJ, (uint8_t *)net_expected, 4);
-
-	uint8_t count = 0;
-	do {
-		int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
-		count++;
-		if (count == 10) {
-			printf("Server terminated. Now terminating\n");
-			exit(1);
-		}
-	} while (sent <= 0);
 	// buffer received PDU
-	add_packet_to_buffer(myBuffer, recvDataBuffer);
+	uint32_t actualNW = 0;
+	memcpy(&actualNW, recvDataBuffer, 4);
+	uint32_t actualHOST = ntohl(actualNW);
+
+	add_packet_to_buffer(receiverBuffer, actualHOST, (const char *)recvDataBuffer, messageLen);
 	return;
 }
 
-void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t writingBuffer, uint16_t messageLen){
+void inOrderData(int socketNum, struct sockaddr_in6 * server, uint8_t * writingBuffer, uint16_t messageLen){
 	// write to disk
-	size_t bytesWritten = fwrite(writingBuffer, 1, messageLen, to_filename);
+	fwrite((const void *)writingBuffer, 1, messageLen, to_filename);
 	(receiverBuffer->expected)++;
-
 	// send RR
-	uint32_t net_seq_num = htonl(seq_num);
-	seq_num++;
 	uint32_t net_expected = htonl(receiverBuffer->expected);
-	memset(sendDataBuffer, 0, receiverBuffer->buffer_size);
-	createPDU(sendDataBuffer, net_seq_num, RR, (uint8_t *)net_expected, 4);
-	uint8_t count = 0;
-	do {
-		int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
-		count++;
-		if ((count == 10) && (sent <= 0)) {
-			printf("Server terminated. Now terminating\n");
-			exit(1);
-		}
-	} while (sent <= 0);
+	uint8_t sendDataBuffer[receiverBuffer->buffer_size];
+	createPDU(sendDataBuffer, RR, (uint8_t *)&net_expected, 4);
+
+	int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
+	if (sent == -1) {
+		printf("Bad things happened\n");
+		exit(1);
+	}
 	return;
 }
 
 
 uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * server, socklen_t servAddrLen) {
 	// filename exchange
-	uint8_t count = 1;
+	uint8_t count = 0;
 	uint8_t recvBuffer[MAXBUF];
 	int serverSocket = 0;
 	int messageLen = 0;
@@ -248,18 +248,21 @@ uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * serv
 	do {
 		filenameExchangePacket(argv, server, socketNum);
 		serverSocket = pollCall(1000); 
+
 			if (serverSocket == -1) {
 				close(socketNum);
 				removeFromPollSet(socketNum);
 				socketNum = setupUdpClientToServer(server, argv[6], atoi(argv[7]));
 				addToPollSet(socketNum);
 				count++;
+
 			} else {
 				if ((messageLen = recvfrom(serverSocket, recvBuffer, MAXBUF, 0, (struct sockaddr *)server, &servAddrLen)) < 0)
 				{
 					perror("recv call");
 					exit(-1);
 				}
+
 				uint16_t calculatedChecksum = in_cksum((unsigned short *)recvBuffer, messageLen);
 
 				if (calculatedChecksum) {
@@ -267,6 +270,7 @@ uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * serv
 					count++;
 					continue;
 				}
+				break;
 			}
 	} while (count < 10);
 
@@ -282,44 +286,41 @@ uint8_t filenameExchange(char* argv[], int socketNum, struct sockaddr_in6 * serv
 	if (flag == 33) {// TODO: update flag = 33 is bad from-filename
 		printf("Error: file: %s not found.\n", argv[1]);
 		exit(1);
-	} 
-	
-	else {
+	} else {
 		to_filename = check_filename(argv[1]);
-		uint16_t buffer_size + 7 = atoi(argv[4]);
-		receiverBuffer = create_receiver_buffer(buffer_size);
+		uint16_t buffer_size = atoi(argv[4]) + 7;
+		uint32_t window_size = atoi(argv[3]);
+		receiverBuffer = create_receiver_buffer(window_size, buffer_size);
 		if (flag == 9) {
 			printf("File OK!\n");
 		} else if (flag == 16) {
 			uint8_t inOrder = inOrderPacketCheck(recvBuffer);
-			if (!inOrder) {
+			if (inOrder == 0) {
 				// in order data
 				inOrderData(socketNum, server, recvBuffer+7, messageLen-7);
 			} else {
 				// buffer data
-				bufferingData(socketNum, server, recvBuffer, messageLen, buffer_size);
+				bufferingData(socketNum, server, recvBuffer+7, messageLen);
 			}
 			return ST_RECVDATA; 
 		} else if (flag == 10) {
 			// deal with EOF
-			return;
+			return 1;
 		} else {
 			// unexpected flag that managed to pass checksum ...
 			printf("How'd we end up here!\n");
 		}
 	}
 
-	return;
+	return 1;
 }
 
 void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int socketNum) {
-
 	uint32_t window_size = atoi(argv[3]);
-	uint16_t buffer_size = receiverBuffer->buffer_size;
+	uint16_t buffer_size = atoi(argv[4]);
 	char from_filename[101];
 	strcpy(from_filename, argv[1]);
 	uint8_t filename_size = strlen(from_filename);
-
 	uint8_t filenamePacket[107];
 	memcpy(filenamePacket, &window_size, 4);
 	memcpy(filenamePacket+4, &buffer_size, 2);
@@ -328,7 +329,8 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 	uint8_t sendBuf[MAXBUF];
 	filename_size += 7;
 
-	createPDU(sendBuf, 0, 8, filenamePacket, filename_size);
+	createPDU(sendBuf, SFLNM, filenamePacket, filename_size);
+	//printBufferInHex(sendBuf, filename_size+7);
 	
 	int sent = sendtoErr(socketNum, sendBuf, filename_size+7, 0, (struct sockaddr *)server, sizeof(*server));
 	if (sent <= 0)
@@ -339,7 +341,8 @@ void filenameExchangePacket(char* argv[], struct sockaddr_in6 * server, int sock
 }
 
 void printBufferInHex(const uint8_t *buffer, size_t length) {
-    for (size_t i = 0; i < length; i++) {
+	size_t i = 0;
+    for (i = 0; i < length; i++) {
         printf("%02X ", buffer[i]); // Print each byte as a 2-digit hexadecimal number
         if ((i + 1) % 16 == 0) {   // Print a newline every 16 bytes for readability
             printf("\n");
@@ -348,18 +351,26 @@ void printBufferInHex(const uint8_t *buffer, size_t length) {
     printf("\n"); // Ensure the output ends with a newline
 }
 
-void createPDU(uint8_t sendBuf[], uint32_t seq_num, uint8_t flag, uint8_t buffer[], uint16_t bufSize) {
+void createPDU(uint8_t sendBuf[], uint8_t flag, uint8_t buffer[], uint16_t bufSize) {
 	uint32_t seq_num_NW = htonl(seq_num);
 	memcpy(sendBuf, &seq_num_NW, 4);
 	memset(sendBuf + 4, 0, 2);
-	sendBuf[7] = flag;
+	sendBuf[6] = flag;
 	memcpy(sendBuf+7, buffer, bufSize);
 	uint16_t checksum = in_cksum((unsigned short *)sendBuf, bufSize + 7);
 	memcpy(sendBuf + 4, &checksum, 2);
+
+	checksum = in_cksum((unsigned short *)sendBuf, bufSize + 7);
+	if (checksum != 0) {
+		printf("Checksum calculated incorrectly\n");
+	}
+
+
+	seq_num++;
 }
 
 FILE * check_filename(char * filename) {
-	FILE* file_pointer = fopen(filename, "w");
+	FILE* file_pointer = fopen(filename, "wb");
 	if (file_pointer == NULL) {
 		perror("Error on open of output file: %s\n");
 		exit(1);

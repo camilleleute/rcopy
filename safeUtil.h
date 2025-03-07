@@ -1,17 +1,15 @@
 // 
-// Writen by Hugh Smith, April 2020
+// Writen by Hugh Smith, Jan. 2023
 //
 // Put in system calls with error checking.
 
 #ifndef __SAFEUTIL_H__
 #define __SAFEUTIL_H__
 
-struct sockaddr;
+#include <stdint.h>
 
-int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int * addrLen);
-int safeSendto(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int addrLen);
-int safeRecv(int socketNum, void * buf, int len, int flags);
-int safeSend(int socketNum, void * buf, int len, int flags);
+int safeRecv(int socketNum, uint8_t * buffer, int bufferLen, int flag);
+int safeSend(int socketNum, uint8_t * buffer, int bufferLen, int flag);
 
 void * srealloc(void *ptr, size_t size);
 void * sCalloc(size_t nmemb, size_t size);

@@ -13,6 +13,7 @@ unsigned char * gethostbyname4(const char * hostName, struct sockaddr_in * aSock
 char * getIPAddressString4(unsigned char * ipAddress);
 char * getIPAddressString6(unsigned char * ipAddress);
 
+
 // Testing functions
 void gethostbyname_test();
 void gethostbyname_test_lookup(char * hostname);
