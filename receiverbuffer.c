@@ -68,9 +68,9 @@ const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
     int index = buffer->expected % buffer->window_size;
 
     // Check if the buffer slot is valid and matches the expected sequence number
-    if (buffer->buffer[index] && 
-        buffer->buffer[index]->valid && 
-        buffer->buffer[index]->sequence_number == buffer->expected) {
+    if ((buffer->buffer[index]) && 
+        (buffer->buffer[index]->valid) && 
+        (buffer->buffer[index]->sequence_number == buffer->expected)) {
         
         // Return the data and its size
         *data_size = buffer->buffer[index]->data_size;
@@ -80,7 +80,7 @@ const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
         buffer->expected++;
 
         // Return a pointer to the data
-        return buffer->buffer[index]->data;
+        return (const char *) buffer->buffer[index]->data;
     }
 
     // Return NULL if no data was fetched
@@ -89,5 +89,5 @@ const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
 
 int is_expected_packet_received(ReceiverBuffer *buffer) {
     int index = buffer->expected % buffer->window_size;
-    return buffer->buffer[index].sequence_number == buffer->expected;
+    return buffer->buffer[index]->sequence_number == buffer->expected;
 }

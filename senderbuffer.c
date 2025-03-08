@@ -56,6 +56,8 @@ void add_packet_to_window(SenderWindow *window, int sequence_number, const char 
     window->buffer[index]->data_size = data_size;
     window->buffer[index]->valid = 0;  // Mark as unacknowledged
     memcpy(window->buffer[index]->data, data, data_size);
+    //move current forward
+    window->current++;
 }
 
 // Free packet if receive RR

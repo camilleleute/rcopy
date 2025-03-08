@@ -37,12 +37,13 @@ SenderWindow* create_sender_window(int window_size, int buffer_size);
 void add_packet_to_window(SenderWindow *window, int sequence_number, const char *data, int data_size);
 void acknowledge_packet(SenderWindow *window, int sequence_number);
 void slide_window(SenderWindow *window, int new_lower);
+Packet* get_packet(SenderWindow *window, int sequence_number, int * data_size);
 int windowOpen(SenderWindow *window);  // Change return type to int
 
 // Function prototypes
 ReceiverBuffer* create_receiver_buffer(int window_size, int buffer_size);
 void add_packet_to_buffer(ReceiverBuffer *buffer, int sequence_number, const char *data, int data_size);
-int fetch_data_from_buffer(ReceiverBuffer *buffer, FILE *to_filename);
+const char * fetch_data_from_buffer(ReceiverBuffer *buffer, int * data_size);
 int is_expected_packet_received(ReceiverBuffer *buffer);
 
 #endif // WINDOW_BUFFER_H
