@@ -1,93 +1,64 @@
 #include "buffer.h"
-#include <stdio.h>   // for perror, fwrite
-#include <stdlib.h>  // for malloc, free
-#include <string.h>  // for memcpy
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-// Initialize the receiver's buffer
 ReceiverBuffer* create_receiver_buffer(int window_size, int buffer_size) {
-    ReceiverBuffer *buffer = (ReceiverBuffer*) malloc(sizeof(ReceiverBuffer));
-    int i;  // Declare loop variable outside the loop for C89 compatibility
+    ReceiverBuffer *buffer = malloc(sizeof(ReceiverBuffer));
+    if (!buffer) return NULL;
 
-    if (!buffer) {
-        perror("Failed to allocate memory for receiver buffer");
-        return NULL;
-    }
-
-    // Allocate memory for the buffer (array of Packet pointers)
-    buffer->buffer = (Packet**) malloc(window_size * sizeof(Packet*));
-    if (!buffer->buffer) {
-        perror("Failed to allocate memory for buffer");
-        free(buffer);
-        return NULL;
-    }
-
-    // Initialize the buffer slots to NULL
-    for (i = 0; i < window_size; i++) {
+    buffer->buffer = malloc(window_size * sizeof(Packet*));
+    if (!buffer->buffer) { free(buffer); return NULL; }
+    int i = 0;
+    for (i = 0; i < window_size; i++)
         buffer->buffer[i] = NULL;
-    }
 
     buffer->window_size = window_size;
     buffer->buffer_size = buffer_size;
     buffer->expected = 0;
     buffer->highest = -1;
-
     return buffer;
 }
 
-// Add a packet to the receiver's buffer
 void add_packet_to_buffer(ReceiverBuffer *buffer, int sequence_number, const char *data, int data_size) {
     int index = sequence_number % buffer->window_size;
+    if (buffer->buffer[index]) free(buffer->buffer[index]);
 
-    // Free the existing packet if it exists
-    if (buffer->buffer[index]) {
-        free(buffer->buffer[index]);
-        buffer->buffer[index] = NULL;  // Set to NULL after freeing
-    }
+    buffer->buffer[index] = malloc(sizeof(Packet) + data_size);
+    if (!buffer->buffer[index]) return;
 
-    // Allocate memory for the new packet
-    buffer->buffer[index] = (Packet*) malloc(sizeof(Packet) + buffer->buffer_size * sizeof(uint8_t));
-    if (!buffer->buffer[index]) {
-        perror("Failed to allocate memory for packet");
-        return;
-    }
-
-    // Initialize packet
     buffer->buffer[index]->sequence_number = sequence_number;
     buffer->buffer[index]->data_size = data_size;
-    buffer->buffer[index]->valid = 1;  // Mark as valid
+    buffer->buffer[index]->valid = 1;
     memcpy(buffer->buffer[index]->data, data, data_size);
 
-    // Update highest received sequence number
-    if (sequence_number > buffer->highest) {
+    if (sequence_number > buffer->highest)
         buffer->highest = sequence_number;
-    }
 }
 
-// Fetch data from the buffer and return it
 const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
     int index = buffer->expected % buffer->window_size;
-
-    // Check if the buffer slot is valid and matches the expected sequence number
-    if ((buffer->buffer[index]) && 
-        (buffer->buffer[index]->valid) && 
-        (buffer->buffer[index]->sequence_number == buffer->expected)) {
-        
-        // Return the data and its size
+    if (buffer->buffer[index] && buffer->buffer[index]->valid && 
+        buffer->buffer[index]->sequence_number == buffer->expected) {
         *data_size = buffer->buffer[index]->data_size;
-
-        // Invalidate the buffer slot
         buffer->buffer[index]->valid = 0;
         buffer->expected++;
-
-        // Return a pointer to the data
-        return (const char *) buffer->buffer[index]->data;
+        return (const char*)buffer->buffer[index]->data;
     }
-
-    // Return NULL if no data was fetched
     return NULL;
 }
 
 int is_expected_packet_received(ReceiverBuffer *buffer) {
     int index = buffer->expected % buffer->window_size;
-    return buffer->buffer[index]->sequence_number == buffer->expected;
+    return (buffer->buffer[index] && buffer->buffer[index]->valid &&
+            buffer->buffer[index]->sequence_number == buffer->expected);
+}
+
+void free_receiver_buffer(ReceiverBuffer *buffer) {
+    if (!buffer) return;
+    int i = 0;
+    for (i = 0; i < buffer->window_size; i++)
+        if (buffer->buffer[i]) free(buffer->buffer[i]);
+    free(buffer->buffer);
+    free(buffer);
 }
