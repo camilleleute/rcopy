@@ -196,7 +196,7 @@ void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filenam
                     if (packet == NULL) {
                         printf("Packet %d doesn't exist!\n", senderBuffer->lower);
                     } else {
-                        int sent = sendtoErr(socketNum, packet, data_size, 0, (struct sockaddr *)client, sizeof(*client));
+                        int sent = sendtoErr(socketNum, packet->data, data_size, 0, (struct sockaddr *)client, sizeof(*client));
                         if (sent <= 0) {
                             perror("send call");
                             exit(-1);
@@ -207,7 +207,7 @@ void sendingData(int socketNum, struct sockaddr_in6 *client, FILE * from_filenam
             
             if (count >= 10) {
                 printf("Client not responding, terminating transfer\n");
-                return;
+                close(socketNum);fclose(from_filename);free_sender_window(senderBuffer); senderBuffer = NULL;exit(0);
             }
         }
     }
@@ -233,7 +233,7 @@ void handleEndOfFile(int socketNum, struct sockaddr_in6 * client, int count) {
             if (packet == NULL) {
                 printf("Packet %d doesn't exist!\n", senderBuffer->lower);
             } else {
-                int sent = sendtoErr(socketNum, packet, data_size, 0, (struct sockaddr *)client, sizeof(*client));
+                int sent = sendtoErr(socketNum, packet->data, data_size, 0, (struct sockaddr *)client, sizeof(*client));
                 if (sent <= 0) {
                     perror("send call");
                     exit(-1);
@@ -340,7 +340,7 @@ int checkRRSandSREJs(int socketNum, struct sockaddr_in6 * client, int count) {
                 if (packet == NULL) {
                     printf("Packet %d doesn't exist!\n", recv_seq_num);
                 } else {
-                    int sent = sendtoErr(socketNum, packet, data_size, 0, (struct sockaddr *)client, sizeof(*client));
+                    int sent = sendtoErr(socketNum, packet->data, data_size, 0, (struct sockaddr *)client, sizeof(*client));
                     if (sent <= 0) {
                         perror("send call");
                         exit(-1);
@@ -420,7 +420,7 @@ int checkArgs(int argc, char *argv[])
 }
 
 void check_error_rate(char * rate) {
-	uint8_t error_rate = atof(rate);
+	float error_rate = atof(rate);
 	if ((error_rate < 0) || (error_rate > 1)){
 		printf("error-rate is out of range. please input a rate between 0 and 1.\n");
 		exit(1);

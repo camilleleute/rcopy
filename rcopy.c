@@ -84,6 +84,7 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
+void sendRRorSREJ(int socketNum, struct sockaddr_in6 * server, uint8_t flag) {uint32_t net_expected = htonl(receiverBuffer->expected);uint8_t sendDataBuffer[11];createPDU(sendDataBuffer, flag, (uint8_t *)&net_expected, 4);int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));if (sent == -1) {perror("Send error");exit(1);}return;}
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[]) {
     sendtoErr_init(atof(argv[5]), DROP_ON, FLIP_ON, DEBUG_ON, RSEED_ON);
@@ -105,15 +106,17 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[]) {
                 // Process regular data packet
                 state = inOrderPacketCheck(recvDataBuffer);
                 if (state == 0) {
+					if (receiverBuffer->highest > receiverBuffer->expected) {state = ST_FLUSH; break;}
                     state = ST_INORDER;
                 } else {
+					uint32_t actualNW = 0; memcpy(&actualNW, recvDataBuffer, 4); uint32_t actualHOST = ntohl(actualNW); if (actualHOST < receiverBuffer->expected) { sendRRorSREJ(socketNum, server, RR); state = ST_RECVDATA; break;} sendRRorSREJ(socketNum, server, SREJ);
                     state = ST_BUFFER;
                 }
                 break;
 
             case ST_INORDER: // inorder
                 inOrderData(socketNum, server, recvDataBuffer, messageLen);
-                state = ST_RECVDATA;
+				state = ST_RECVDATA;
                 break;
 
             case ST_BUFFER: // buffering
@@ -123,6 +126,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server, char* argv[]) {
                 if (state == 0) {
                     state = ST_FLUSH;
                 } else {
+					uint32_t actualNW = 0; memcpy(&actualNW, recvDataBuffer, 4); uint32_t actualHOST = ntohl(actualNW); if (actualHOST < receiverBuffer->expected){ sendRRorSREJ(socketNum, server, RR);}
                     state = ST_BUFFER;
                 }
                 break;
@@ -245,9 +249,8 @@ void bufferingData(int socketNum, struct sockaddr_in6 * server, uint8_t recvData
 	uint32_t net_expected = htonl(receiverBuffer->expected);
 	uint8_t sendDataBuffer[receiverBuffer->buffer_size];
 	createPDU(sendDataBuffer, SREJ, (uint8_t *)&net_expected, 4);
-	printf("Sending SREJ for packet: %d\n", seq_num);
 
-	int sent = sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server));
+	int sent = 0 ? sendtoErr(socketNum, sendDataBuffer, 11, 0, (struct sockaddr *)server, sizeof(*server)) : 0;
 	if (sent == -1) {
 		perror("Send error");
 		exit(1);

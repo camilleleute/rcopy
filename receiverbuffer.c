@@ -42,7 +42,6 @@ const char* fetch_data_from_buffer(ReceiverBuffer *buffer, int *data_size) {
         buffer->buffer[index]->sequence_number == buffer->expected) {
         *data_size = buffer->buffer[index]->data_size;
         buffer->buffer[index]->valid = 0;
-        buffer->expected++;
         return (const char*)buffer->buffer[index]->data;
     }
     return NULL;
